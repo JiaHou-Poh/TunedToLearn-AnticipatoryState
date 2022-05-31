@@ -1,0 +1,2372 @@
+----
+title: "TunedToLearn_AnticipatoryConvergence_Notebook"
+output: html_notebook
+---
+
+Analysis notebook for "Tuned to Learn: An anticipatory hippocampal convergence state conducive to memory formation revealed during midbrain activation"
+
+
+```{r Load Required Packages}
+# Load required packages
+pkgs = c("tidyverse","magrittr","lme4","lmerTest","emmeans","cowplot","gghalves","mediation")
+
+inst = lapply(pkgs, library, character.only=TRUE)
+```
+
+# **Initialization**
+```{r}
+# Plot Parameters
+
+hcolor1<-"#FF7C00"
+lcolor1<-"#02859E"
+
+hcolor2 <- "#b14200"
+lcolor2 <- "#007356"
+
+mcolor1<-"#120940"
+mcolor2<-"#8b83b5"
+
+# Figure parameters
+bwidth<-0.8 # Barwidth
+sub_dotsizeB <- 3 # size of dot for subject scatter in the behavioral plots
+sub_dotsize <-4.5 # size of dot for subject scatter
+sub_dotsizeS <-3.5 # size of dot for subject scatter in split plot(facet)
+sub_dotalpha <-.5
+mean_dotsize <-6.5 # size of dot for mean point
+mean_dotsizeS <-5 # size of dot for mean point in split plot(facet)
+mean_dotalpha<-.7 
+erbar_thick <- .5 # thickness of error bars
+erbar_width <- .1 # width of ends of error bar
+erbar_alpha <- 1 
+line_alpha <- .3 # Alpha of line connecting points
+theme_bs <- 21 # Theme base size
+plotbar_width <-2.25
+
+#figfldr <-"~/Dropbox/A_WorkingDocuments/ICE/ice-learningstate/Figures_Pub_pdf_v6/"
+#revfigfldr <-"~/Dropbox/A_Projects_Manuscripts/Submitted/ICE/Manuscript/Revision_Figures/"
+figsave<-0
+```
+
+# **Data summary**
+Number of subjects: 23
+Total trials across all subjects: 3582
+After removing trials neither High nor Low Curiosity: 3307
+After accounting for curiosity and removing trials that are NaN for memory: 3188
+
+Number of High Curiosity trials: 1599
+Number of Low Curiosity trials: 1589
+
+Mean Number of High Curiosity Hits: 43.8 (Min = 25 (subj104), Max = 68)
+Mean Number of High Curiosity Misses: 25.74 (Min = 4 (subj 119), Max = 44)
+Mean Number of Low Curiosity Hits: 27.3 (Min = 9 (subj114), Max = 50)
+Mean Number of Low Curiosity Misses: 41.8 (Min = 18 (subj102), Max = 61)
+
+Lowest number of total valid trials: Subj102 - 82 trial (44 High)
+
+# **Behavioral Data analysis (Group Average)**
+## Data Prep
+```{r Behav Data Prep}
+full_dat <- read.csv("Data_csv/Convergence_TrialByTrial_Compiled.csv")
+full_dat <- drop_na(full_dat,c("curHighLow","memory"))
+full_dat <- rename(full_dat,Motor=motor,
+                   Memory=memory)
+beh_raw <- full_dat[,1:12]
+sub_col <- c("subj","curHighLow","Motor","Memory")
+beh_raw[sub_col] <- lapply(beh_raw[sub_col],factor)
+beh_raw$Hits <- as.numeric(as.character(beh_raw$Memory))
+
+beh_avg1 = beh_raw %>% group_by(subj,curHighLow,Motor) %>% summarise(mem = mean(Hits),
+                                                                     mem_count = sum(Hits),
+                                                                     knowing = mean(likelihoodZ),
+                                                                     RT_mean = mean(motorRTs),
+                                                                     RT_median = median(motorRTs))
+
+beh_avg2 = beh_raw %>% group_by(subj,curHighLow) %>% summarise(mem = mean(Hits),
+                                                                     mem_count = sum(Hits),
+                                                                     knowing = mean(likelihoodZ),
+                                                                     RT_mean = mean(motorRTs),
+                                                                     RT_median = median(motorRTs))
+```
+
+Analysis for memory performance with repeated measure ANOVA 
+```{r Memory Performance ANOVA - Curiosity x Motor}
+mem_mdl1 <- aov(mem ~ curHighLow * Motor + Error(subj/(curHighLow * Motor)),data=beh_avg1)
+summary(mem_mdl1)
+eta_sq(mem_mdl1,partial=T)
+
+# Post-hoc Comparisons
+em1 <-emmeans(mem_mdl1, ~curHighLow * Motor)
+em1
+hc_m <- c(0,0,0,1)
+hc_n <- c(0,1,0,0)
+lc_m <- c(0,0,1,0)
+lc_n <- c(1,0,0,0)
+
+comp<- contrast(em1, method=list("HC Motor - NoMotor" = hc_m - hc_n,
+                          "LC Motor - NoMotor" = lc_m - lc_n,
+                          "HC - LC_Motor" = hc_m-lc_m,
+                          "HC - LC_NoMotor" = hc_n - lc_n),adjust="bonferroni") 
+comp
+confint(comp)
+```
+There was a significant main effect of both curiosity and action contingency with a significant interaction.
+Follow-up paired comparisons showed that Action-contingency only had an effect on memory in the low curiosity condition, whereby memory for action-contingent trial was better than memory for non action trials.
+
+Results when collapsing across Action contingency.
+```{r Memory Performance ANOVA - Curiosity only}
+mem_mdl2 <- aov(mem ~ curHighLow + Error(subj/curHighLow), data=beh_avg2)
+summary(mem_mdl2)
+eta_sq(mem_mdl2,partial=T)
+
+# two-sample t-tests
+hcur_avg <- subset(beh_avg2,curHighLow==1)
+lcur_avg <- subset(beh_avg2,curHighLow==0)
+
+hit_pairedt <- t.test(hcur_avg$mem,lcur_avg$mem,paired=T)
+hit_pairedt
+
+# Summary Statistics
+mem_summary_stats = beh_avg2 %>% group_by(curHighLow) %>% summarise(mem_mean = mean(mem), 
+                                                             mem_sd = sd(mem),
+                                                             mem_sem = sd(mem)/sqrt(n())
+)
+mem_summary_stats
+
+# Effect size
+tmp_diff <- hcur_avg$mem - lcur_avg$mem
+diff_mean <- mean(tmp_diff)
+diff_sd <- sd(tmp_diff)
+cohend <- diff_mean / diff_sd
+cohend
+```
+
+```{r Figure: Memory performance - Curiosity}
+## Plot memory performance based on curiosity 
+## Memory plot with scatter and box
+colors <-c("0"=lcolor1,"1"=hcolor1)
+
+  
+ggplot(data=beh_avg2, aes(y=mem)) +
+  geom_point(data=beh_avg2 %>% filter(curHighLow=="0"), aes(x=curHighLow), color=lcolor1, size= sub_dotsizeB, alpha=sub_dotalpha) +
+  geom_point(data=beh_avg2 %>% filter(curHighLow=="1"), aes(x=curHighLow), color=hcolor1, size= sub_dotsizeB, alpha=sub_dotalpha) +
+  geom_line(aes(x = curHighLow, group = subj), color = 'lightgray', alpha = .5) +
+  geom_half_boxplot(data = beh_avg2 %>% filter(curHighLow=="0"), aes(x=curHighLow, y = mem), position = position_nudge(x = -.25),side = "r",outlier.shape = NA, center = TRUE, errorbar.draw = TRUE, width = .25, fill = lcolor1, alpha = .5) +
+  geom_half_boxplot(data = beh_avg2 %>% filter(curHighLow=="1"), aes(x=curHighLow, y = mem), position = position_nudge(x = .15),side = "r",outlier.shape = NA, center = TRUE, errorbar.draw = TRUE, width = .25, fill = hcolor1, alpha = .5) +
+  geom_half_violin(data = beh_avg2 %>% filter(curHighLow=="0"),aes(x = curHighLow, y = mem), position = position_nudge(x = -0.3),side = "l", fill = lcolor1, alpha = .5, trim = F) +
+  geom_half_violin(data = beh_avg2 %>% filter(curHighLow=="1"),aes(x = curHighLow, y = mem), position = position_nudge(x = 0.3),side = "r", fill = hcolor1, alpha = .5, trim = F) +
+  labs(y="Memory Recall", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.6,.6)) + 
+  coord_cartesian(ylim=c(0,1)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <- paste(figfldr, "Fig_MemoryPerformance_Cur.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+```{r Figure: Memory performance - Curiosity x Action}
+## Plot memory performance based on curiosity and action
+## Memory plot with scatter and box
+colors <-c("0"=lcolor1,"1"=hcolor1)
+labels <- c("0"="No Action","1"="Action")
+  
+ggplot(data=beh_avg1, aes(y=mem)) +
+  geom_point(data=beh_avg1 %>% filter(curHighLow=="0"), aes(x=curHighLow), color=lcolor1, size= sub_dotsizeB, alpha=sub_dotalpha) +
+  geom_point(data=beh_avg1 %>% filter(curHighLow=="1"), aes(x=curHighLow), color=hcolor1, size= sub_dotsizeB, alpha=sub_dotalpha) +
+  geom_line(aes(x = curHighLow, group = subj), color = 'lightgray', alpha = .5) +
+  geom_half_boxplot(data = beh_avg1 %>% filter(curHighLow=="0"), aes(x=curHighLow, y = mem), position = position_nudge(x = -.25),side = "r",outlier.shape = NA, center = TRUE, errorbar.draw = TRUE, width = .25, fill = lcolor1, alpha = .5) +
+  geom_half_boxplot(data = beh_avg1 %>% filter(curHighLow=="1"), aes(x=curHighLow, y = mem), position = position_nudge(x = .15),side = "r",outlier.shape = NA, center = TRUE, errorbar.draw = TRUE, width = .25, fill = hcolor1, alpha = .5) +
+  geom_half_violin(data = beh_avg1 %>% filter(curHighLow=="0"),aes(x = curHighLow, y = mem), position = position_nudge(x = -0.3),side = "l", fill = lcolor1, alpha = .5, trim = F) +
+  geom_half_violin(data = beh_avg1 %>% filter(curHighLow=="1"),aes(x = curHighLow, y = mem), position = position_nudge(x = 0.3),side = "r", fill = hcolor1, alpha = .5, trim = F) +
+  labs(y="Memory Recall", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.6,.6)) + 
+  coord_cartesian(ylim=c(0,1)) + 
+  facet_wrap(~Motor,labeller = labeller(Motor=labels)) +
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <- paste(figfldr, "Fig_MemoryPerformance_CurMot.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+To account for the influence of prior knowledge we also ran a mixed model analysis which included self-reported likelihood of knowing as a covariate.
+```{r Behavioral control analysis: Prior knowledge on memory}
+mem_lm1 <- glmer(Memory ~ curHighLow + (1|subj), data=beh_raw, family = binomial)
+summary(mem_lm1)
+
+mem_lm2 <- glmer(Memory ~ curHighLow + likelihoodZ + (1|subj), data=beh_raw, family = binomial)
+summary(mem_lm2)
+```
+When controlling for Likelihood of knowing, curiosity remained a significant predictor of subsequent memory.
+
+We also ran the same model with the z-scored curiosity rating instead of the binarised category of high vs low curiosity.
+```{r}
+mem_lm3 <- glmer(Memory ~ curiosityZ + (1|subj), data=beh_raw, family = binomial)
+summary(mem_lm3)
+
+mem_lm4 <- glmer(Memory ~ curiosityZ + likelihoodZ + (1|subj), data=beh_raw, family = binomial)
+summary(mem_lm4)
+```
+Results remained similar when using z-scored curiosity ratings instead of the binarised levels. This should also be expected, given that the ratings for High and Low curiosity should already be highly separated due to the tertile split used during question selection.
+
+For trials with motor demand we also additionally examined if RT is related to subsequent memory.
+```{r}
+beh_motor <- subset(beh_raw,Motor==1)
+beh_motor$motorRTsZ <- ave(beh_motor$motorRTs,beh_motor$subj,FUN=scale)
+
+mem_lm5 <- glmer(Memory ~ curiosityZ + likelihoodZ + (1|subj), data=beh_motor, family = binomial)
+summary(mem_lm5)
+
+mem_lm6 <- glmer(Memory ~ curiosityZ + likelihoodZ + motorRTsZ + (1|subj), data=beh_motor, family = binomial)
+summary(mem_lm6)
+
+anova(mem_lm5,mem_lm6)
+```
+When RT for the action demand trials was included as a predictor, RT was not a significant predictor. This suggests that the effect of curiosity on memory was unlikely to be purely related to changes in vigilance/attention.
+
+# **fMRI Analysis**
+## Data Prep
+```{r fMRI Data Prep}
+dist_raw <- full_dat
+dist_raw[sub_col] <- lapply(dist_raw[sub_col],factor)
+
+```
+
+## **Anticipatory Univariate activation**
+We first looked at the effect of curiosity on anticipatory activation in the MTL and also in the mesolimbic circuit.
+
+A trial-by-trial linear mixed model approach was used. Curiosity and Action contingency were modeled as fixed effects and subject was included as random intercepts.
+
+### VTA
+```{r VTA activation - Curiosity x Motor}
+wroi <- "Q_VTA_50_noSN_bin_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow","Motor",wroi)] 
+colnames(tmp_act)[4]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+# Curiosity X Motor
+q.vta.act_cm <-lmer(Act ~ curHighLow*Motor + (1|subj), data=tmp_act, REML=F)
+summary(q.vta.act_cm)
+emmeans(q.vta.act_cm, list(pairwise ~ curHighLow), adjust = "tukey", pbkrtest.limit = 3188)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow,Motor) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow,Motor) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+labels <- c("0"="No Action","1"="Action")
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Anticipatory VTA BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  facet_wrap(~Motor,labeller = labeller(Motor=labels)) +
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_CM_qVTA.pdf",sep="")
+  ggsave(fname)
+}
+```
+In the VTA, there is a significant main effect of curiosity, with no main effect of action and no interaction.
+
+### HPC
+```{r HPC activation - Curiosity x Motor}
+wroi <- "Q_HPC_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow","Motor",wroi)] 
+colnames(tmp_act)[4]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+
+# Curiosity X Motor
+q.hpc.act_cm <-lmer(Act ~ curHighLow*Motor + (1|subj), data=tmp_act, REML=F)
+summary(q.hpc.act_cm)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow,Motor) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow,Motor) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+labels <- c("0"="No Action","1"="Action")
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Anticipatory HPC BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  facet_wrap(~Motor,labeller = labeller(Motor=labels)) +
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  # fname <-paste(figfldr, "fMRI_Uni_CM_qHPC.eps",sep="")
+  # ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_Uni_CM_qHPC.pdf",sep="")
+  ggsave(fname)
+}
+```
+No effect of curiosity or action in the HPC.
+
+### MTL-PHC
+```{r PHC activation - Curiosity x Motor}
+wroi <- "Q_PHC_mask_MNI152_bin_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow","Motor",wroi)] 
+colnames(tmp_act)[4]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+
+# Curiosity X Motor
+q.phc.act_cm <-lmer(Act ~ curHighLow*Motor + (1|subj), data=tmp_act, REML=F)
+summary(q.phc.act_cm)
+emmeans(q.phc.act_cm, list(pairwise ~ curHighLow), adjust = "tukey", pbkrtest.limit = 3188)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow,Motor) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow,Motor) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+labels <- c("0"="No Action","1"="Action")
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Anticipatory PHC BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  facet_wrap(~Motor,labeller = labeller(Motor=labels)) +
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  # fname <-paste(figfldr, "fMRI_Uni_CM_qPHC.eps",sep="")
+  # ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_Uni_CM_qPHC.pdf",sep="")
+  ggsave(fname)
+}
+```
+In the PHC there was a marginal effect of curiosity (p=.055) with no effect of action or interaction.
+
+### MTL-PRC
+```{r PRC activation - Curiosity x Motor}
+wroi <- "Q_PRC_mask_MNI152_bin_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow","Motor",wroi)] 
+colnames(tmp_act)[4]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+
+# Curiosity X Motor
+q.prc.act_cm <-lmer(Act ~ curHighLow*Motor + (1|subj), data=tmp_act, REML=F)
+summary(q.prc.act_cm)
+emmeans(q.prc.act_cm, list(pairwise ~ curHighLow), adjust = "tukey", pbkrtest.limit = 3188)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow,Motor) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow,Motor) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+labels <- c("0"="No Action","1"="Action")
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Anticipatory PRC BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  facet_wrap(~Motor,labeller = labeller(Motor=labels)) +
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  # fname <-paste(figfldr, "fMRI_Uni_CM_qPRC.eps",sep="")
+  # ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_Uni_CM_qPRC.pdf",sep="")
+  ggsave(fname)
+}
+```
+In the PRC, there was a significant main effect of curiosity with no effect of action or interaction.
+
+
+As there was no effect of action or interaction, we collapsed across all action-contingency to increase power for detection of curiosity-related effects which are of primary interest.
+
+----------------CURIOSITY ONLY MODEL -----------------------
+### VTA
+```{r VTA activation - Curiosity}
+wroi <- "Q_VTA_50_noSN_bin_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow",wroi)] 
+colnames(tmp_act)[3]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+# Curiosity only
+q.vta.act_c <-lmer(Act ~ curHighLow + (1|subj), data=tmp_act, REML=F)
+summary(q.vta.act_c)
+emmeans(q.vta.act_c, list(pairwise ~ curHighLow), adjust = "tukey", pbkrtest.limit = 3188)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Anticipatory VTA BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  # fname <-paste(figfldr, "fMRI_Uni_qVTA.eps",sep="")
+  # ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_Uni_qVTA.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+### HPC
+```{r HPC activation - Curiosity}
+wroi <- "Q_HPC_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow",wroi)] 
+colnames(tmp_act)[3]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+# Curiosity only
+q.hpc.act_c <-lmer(Act ~ curHighLow + (1|subj), data=tmp_act, REML=F)
+summary(q.hpc.act_c)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Anticipatory HPC BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  # fname <-paste(figfldr, "fMRI_Uni_qHPC.eps",sep="")
+  # ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_Uni_qHPC.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+### MTL-PHC
+```{r PHC activation - Curiosity}
+wroi <- "Q_PHC_mask_MNI152_bin_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow",wroi)] 
+colnames(tmp_act)[3]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+# Curiosity only
+q.phc.act_c <-lmer(Act ~ curHighLow + (1|subj), data=tmp_act, REML=F)
+summary(q.phc.act_c)
+emmeans(q.phc.act_c, list(pairwise ~ curHighLow), adjust = "tukey", pbkrtest.limit = 3188)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Anticipatory PHC BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  # fname <-paste(figfldr, "fMRI_Uni_qPHC.eps",sep="")
+  # ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_Uni_qPHC.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+### MTL-PRC
+```{r PRC activation - Curiosity}
+wroi <- "Q_PHC_mask_MNI152_bin_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow",wroi)] 
+colnames(tmp_act)[3]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+# Curiosity only
+q.prc.act_c <-lmer(Act ~ curHighLow + (1|subj), data=tmp_act, REML=F)
+summary(q.prc.act_c)
+emmeans(q.prc.act_c, list(pairwise ~ curHighLow), adjust = "tukey", pbkrtest.limit = 3188)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Anticipatory PRC BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  # fname <-paste(figfldr, "fMRI_Uni_qPRC.eps",sep="")
+  # ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_Uni_qPRC.pdf",sep="")
+  ggsave(fname)
+}
+```
+During the anticipatory phase, there was a significant main effect of curiosity in the VTA and the PRC, with a trending effect observed in the PHC. There no effect of curiosity in the Hippocampus.
+
+## **Univariate activation predicting memory including all ROIs**
+### ROI - Memory (Anticipatory Phase)
+```{r Anticipatory activation predicting memory}
+q.rois.act_mem<- glmer(Memory ~ Q_VTA_50_noSN_bin_mean_act + Q_HPC_mean_act + Q_PHC_mask_MNI152_bin_mean_act + Q_PRC_mask_MNI152_bin_mean_act + (1|subj), family = binomial, data=dist_raw)
+summary(q.rois.act_mem)
+
+# Including an interaction term for VTA
+q.vta_mem_base <- glmer(Memory ~ Q_VTA_50_noSN_bin_mean_act + (1|subj), family=binomial,data=dist_raw)
+q.vta_mem_cur <- glmer(Memory ~ Q_VTA_50_noSN_bin_mean_act  + Q_VTA_50_noSN_bin_mean_act:curHighLow + (1|subj), family=binomial,data=dist_raw)
+anova(q.vta_mem_base,q.vta_mem_cur)
+  
+# Using only low curiosity trials for VTA
+dist_lc <-subset(dist_raw,curHighLow==0)
+q.vta_mem_lc<- glmer(Memory ~ Q_VTA_50_noSN_bin_mean_act + (1|subj), family = binomial, data=dist_lc)
+summary(q.vta_mem_lc)
+
+```
+When all ROIs are included, only VTA was a significant predictor of subsequent memory. 
+To examine if this was purely driven by difference associated with curiosity state, a separate model of VTA was compared with a model that includes an interaction term. This did not result in a better model fit. 
+Separate model that included only low curiosity trial showed a continued trend for significant effect (p=.052).
+The inclusion of a random slope for VTA resulted in a singular fit, and as such a random slope was not included. 
+
+Control analysis - Including curiosity as a continuous covariate
+```{r}
+q.vta_mem_ctrl <- glmer(Memory ~ Q_VTA_50_noSN_bin_mean_act  + curiosityZ + (1|subj), family=binomial,data=dist_raw)
+summary(q.vta_mem_ctrl)
+```
+When including curiosity rating and VTA activation within a single model, only curiosity rating was a significant predictor. This is unsurprising given that variation in VTA activation should primarily be driven by differences in curiosity.
+
+Plot parameter estimates for univariate activation and memory (Anticipatory)
+```{r Plot PE for anticipatory activation predicting memory}
+betas<-fixef(q.rois.act_mem)[2:5]
+odds<-exp(betas)
+se<-sqrt(diag(vcov(q.rois.act_mem)))[2:5]
+oddse<-sqrt(odds^2 * se)
+pdat<-data.frame(betas)
+pdat$odds<-odds
+pdat$se<-se
+pdat$oddse<-oddse
+
+rownames<-c("VTA\nActivation\n",
+            "HPC\nActivation\n",
+            "PHC\nActivation\n",
+            "PRC\nActivation\n")
+
+sortedrownames<-c( "HPC\nActivation\n",
+                   "PHC\nActivation\n",
+                   "PRC\nActivation\n",
+                   "VTA\nActivation\n")
+
+sortedrownames2<-c( "VTA\nActivation\n",
+                    "PRC\nActivation\n",
+                    "PHC\nActivation\n",
+                    "HPC\nActivation\n")
+
+
+pdat$labels<-rownames
+pdat$labels <-factor(pdat$labels,levels=sortedrownames)
+
+## Beta on X-axis
+ggplot(pdat,aes(x=betas,y=labels)) +
+  geom_point(data=pdat, aes(x=betas,y=labels), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(y=labels, xmin=betas-se,xmax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_vline(xintercept=0,linetype="dashed")  +
+  labs(y="", x="Parameter Estimate") + 
+  coord_cartesian(xlim=c(-0.2,0.2)) +
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_Q_Mem_PE1.pdf",sep="")
+  ggsave(fname)
+}
+
+pdat$labels <-factor(pdat$labels,levels=sortedrownames2)
+## Beta on Y-axis
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_point(data=pdat, aes(x=labels,y=betas), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="dashed")  +
+  labs(x="", y="Parameter Estimate") + 
+  coord_cartesian(ylim=c(-0.2,0.2)) +
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_Q_Mem_PE2.pdf",sep="")
+  ggsave(fname)
+}
+
+
+## Beta on Y-axis (bar graphs)
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_bar(data=pdat, aes(x=labels,y=betas),alpha=1,show.legend=F, stat="identity", width=.6, color="black") + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="solid")  +
+  labs(x="", y="Parameter Estimate") + 
+  annotate(x=1,y=.2,geom="text",label="*",size=10) +
+  coord_cartesian(ylim=c(-0.15,0.25)) +
+  theme_classic(base_size=theme_bs) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_Q_Mem_PE_bar.pdf",sep="")
+  ggsave(fname)
+}
+
+## Separate PE plot for each ROI
+for (i in 1:4){
+  pdat_t = pdat[i,]
+  ggplot(pdat_t,aes(x=labels,y=betas)) +
+    geom_bar(data=pdat_t, aes(x=labels,y=betas),alpha=1,show.legend=F, stat="identity", width=1, color="black") + 
+    geom_errorbar(data=pdat_t,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+    geom_hline(yintercept=0,linetype="solid")  +
+    labs(x="", y="Parameter Estimate") + 
+    #annotate(x=1,y=.2,geom="text",label="*",size=10) +
+    coord_cartesian(ylim=c(-0.15,0.25),xlim=c(.5,1.5)) +
+    theme_classic(base_size=theme_bs) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),axis.ticks.x=element_blank(), axis.text.x=element_blank())
+  wroi <- substr(pdat_t$labels,1,3)
+  if (figsave == 1){
+    fname <-paste(figfldr,wroi , "_Q_Mem_PE_", plotbar_width, ".pdf",sep="")
+    ggsave(fname, width=plotbar_width,height=4.5)
+  }
+}
+
+```
+
+Slopes for each ROI on predicted memory outcome (Anticipation)
+Note that for the individual plots, prediction is done based on the full model, and not separately fitted for individual model. So the slope would not fully match the parameter estimate in the full model.
+```{r Plot slopes for anticipatory activation predicting memory}
+wroi <- c("Q_VTA_50_noSN_bin_mean_act","Q_HPC_mean_act","Q_PHC_mask_MNI152_bin_mean_act","Q_PRC_mask_MNI152_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","Memory",wroi)]
+tmp_dat$FittedMem <- fitted(q.rois.act_mem)
+tmp_dat$FittedMem_dm <- tmp_dat$FittedMem - ave(tmp_dat$FittedMem,tmp_dat$subj,FUN=mean)
+
+
+## VTA
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_VTA_50_noSN_bin_mean_act, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+  geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_VTA_50_noSN_bin_mean_act, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.15,.15)) +
+  labs(y="Δ Probability of Recall", x="Anticipatory BOLD (a.u)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_qVTA-Mem.pdf",sep="")
+  ggsave(fname, device=cairo_pdf)
+}
+
+## HPC
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_HPC_mean_act, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_HPC_mean_act, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.15,.15)) +
+  labs(y="Δ Probability of Recall", x="Anticipatory BOLD (a.u)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_qHPC-Mem.pdf",sep="")
+  ggsave(fname, device=cairo_pdf)
+}
+
+## PHC
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_PHC_mask_MNI152_bin_mean_act, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_PHC_mask_MNI152_bin_mean_act, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.15,.15)) +
+  labs(y="Δ Probability of Recall", x="Anticipatory BOLD (a.u)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_qPHC-Mem.pdf",sep="")
+  ggsave(fname, device=cairo_pdf)
+}
+
+## PRC
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_PRC_mask_MNI152_bin_mean_act, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_PRC_mask_MNI152_bin_mean_act, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.15,.15)) +
+  labs(y="Δ Probability of Recall", x="Anticipatory BOLD (a.u)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  #fname <-paste(figfldr, "fMRI_Uni_qPRC-Mem.pdf",sep="")
+  #ggsave(fname, device=cairo_pdf)
+}
+```
+
+
+For completeness, the same analysis was repeated for the Answer phase where to-be-encoded information was presented.
+### VTA
+```{r VTA activation (Answer) - Curiosity }
+wroi <- "A_VTA_50_noSN_bin_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow",wroi)] 
+colnames(tmp_act)[3]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+# Curiosity only
+a.vta.act_c <-lmer(Act ~ curHighLow + (1|subj), data=tmp_act, REML=F)
+summary(a.vta.act_c)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Answer phase VTA BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  # fname <-paste(figfldr, "fMRI_Uni_aVTA.eps",sep="")
+  # ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_Uni_aVTA.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+### HPC
+```{r HPC activation (Answer) - Curiosity}
+wroi <- "A_HPC_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow",wroi)] 
+colnames(tmp_act)[3]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+# Curiosity only
+a.hpc.act_c <-lmer(Act ~ curHighLow + (1|subj), data=tmp_act, REML=F)
+summary(a.hpc.act_c)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Answer phase HPC BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_aHPC.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+### MTL-PHC
+```{r PHC activation (Answer) - Curiosity}
+wroi <- "A_PHC_mask_MNI152_bin_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow",wroi)] 
+colnames(tmp_act)[3]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+# Curiosity only
+a.phc.act_c <-lmer(Act ~ curHighLow + (1|subj), data=tmp_act, REML=F)
+summary(a.phc.act_c)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Answer phase PHC BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_aPHC.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+### MTL-PRC
+```{r PRC activation (Answer) - Curiosity}
+wroi <- "A_PRC_mask_MNI152_bin_mean_act"
+tmp_act <- dist_raw[c("subj","curHighLow",wroi)] 
+colnames(tmp_act)[3]<-"Act"
+tmp_act <- na.omit(tmp_act)
+
+# Curiosity only
+a.prc.act_c <-lmer(Act ~ curHighLow + (1|subj), data=tmp_act, REML=F)
+summary(a.prc.act_c)
+
+## Plot
+# Dot as mean
+tmp_act2 <- tmp_act %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_act2 %>% group_by(curHighLow) %>% summarise(act = mean(Act), 
+                                                     act_sem = sd(Act)/sqrt(n())
+)
+
+ggplot() +
+  geom_point(data=tmp_act2, aes(x = as.numeric(curHighLow), y = Act, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_act2, aes(x=as.numeric(curHighLow), y = Act, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=act), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=act), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+   geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=act-act_sem,ymax=act+act_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="Answer phase PRC BOLD\n(a.u.)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_aPRC.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+## **Univariate activation predicting memory including all ROIs**
+### ROI - Memory (Answer Phase)
+```{r Answer Phase activatoion predicting memory }
+a.rois.act_mem<- glmer(Memory ~ A_VTA_50_noSN_bin_mean_act + A_HPC_mean_act + A_PHC_mask_MNI152_bin_mean_act + A_PRC_mask_MNI152_bin_mean_act + (1|subj), family = binomial, data=dist_raw)
+summary(a.rois.act_mem)
+
+# PRC random slope model
+a.rois.act_mem2<- glmer(Memory ~ A_VTA_50_noSN_bin_mean_act + A_HPC_mean_act + A_PHC_mask_MNI152_bin_mean_act + A_PRC_mask_MNI152_bin_mean_act + (1 + A_PRC_mask_MNI152_bin_mean_act|subj), family = binomial, data=dist_raw)
+anova(a.rois.act_mem,a.rois.act_mem2)
+```
+Only activation in the PRC was a significant predictor of memory at answer.
+The inclusion of a random slope for PRC did not result in a better model fit.
+
+```{r Plot PE for answer phase activation predicting memory}
+betas<-fixef(a.rois.act_mem)[2:5]
+odds<-exp(betas)
+se<-sqrt(diag(vcov(a.rois.act_mem)))[2:5]
+oddse<-sqrt(odds^2 * se)
+pdat<-data.frame(betas)
+pdat$odds<-odds
+pdat$se<-se
+pdat$oddse<-oddse
+
+rownames<-c("VTA\nActivation\n",
+            "HPC\nActivation\n",
+            "PHC\nActivation\n",
+            "PRC\nActivation\n")
+
+sortedrownames<-c( "HPC\nActivation\n",
+                   "PHC\nActivation\n",
+                   "PRC\nActivation\n",
+                   "VTA\nActivation\n")
+
+sortedrownames2<-c( "VTA\nActivation\n",
+                    "PRC\nActivation\n",
+                    "PHC\nActivation\n",
+                    "HPC\nActivation\n")
+
+
+pdat$labels<-rownames
+pdat$labels <-factor(pdat$labels,levels=sortedrownames)
+
+## Beta on X-axis
+ggplot(pdat,aes(x=betas,y=labels)) +
+  geom_point(data=pdat, aes(x=betas,y=labels), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(y=labels, xmin=betas-se,xmax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_vline(xintercept=0,linetype="dashed")  +
+  labs(y="", x="Parameter Estimate") + 
+  coord_cartesian(xlim=c(-0.2,0.35)) +
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_A_Mem_PE1.pdf",sep="")
+  ggsave(fname)
+}
+
+pdat$labels <-factor(pdat$labels,levels=sortedrownames2)
+## Beta on Y-axis
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_point(data=pdat, aes(x=labels,y=betas), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="dashed")  +
+  labs(x="", y="Parameter Estimate") + 
+  coord_cartesian(ylim=c(-0.2,0.35)) +
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_A_Mem_PE2.pdf",sep="")
+  ggsave(fname)
+}
+
+## Beta on Y-axis (bar graphs)
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_bar(data=pdat, aes(x=labels,y=betas),alpha=1,show.legend=F, stat="identity", width=.6, color="black") + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="solid")  +
+  labs(x="", y="Parameter Estimate") + 
+  coord_cartesian(ylim=c(-0.2,0.4)) +
+  annotate(x=2,y=.35,geom="text",label="**",size=10) +
+  theme_classic(base_size=theme_bs) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_A_Mem_PE_bar.pdf",sep="")
+  ggsave(fname)
+}
+
+## Separate PE plot for each ROI
+for (i in 1:4){
+  pdat_t = pdat[i,]
+  ggplot(pdat_t,aes(x=labels,y=betas)) +
+    geom_bar(data=pdat_t, aes(x=labels,y=betas),alpha=1,show.legend=F, stat="identity", width=1, color="black") + 
+    geom_errorbar(data=pdat_t,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+    geom_hline(yintercept=0,linetype="solid")  +
+    labs(x="", y="Parameter Estimate") + 
+    coord_cartesian(ylim=c(-0.2,0.4),xlim=c(.5,1.5)) +
+    theme_classic(base_size=theme_bs) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),axis.ticks.x=element_blank(), axis.text.x=element_blank())
+  wroi <- substr(pdat_t$labels,1,3)
+  if (figsave == 1){
+    fname <-paste(figfldr,wroi , "_A_Mem_PE_", plotbar_width, ".pdf",sep="")
+    ggsave(fname, width=plotbar_width,height=4.5)
+  }
+}
+
+```
+
+Slopes for each ROI on predicted memory outcome (Answer)
+Note that for the individual plots, prediction is done based on the full model, and not separately fitted for individual model. So the slope would not fully match the parameter estimate in the full model
+```{r Plot slope for answer phase activation predicing memory}
+wroi <- c("A_VTA_50_noSN_bin_mean_act","A_HPC_mean_act","A_PHC_mask_MNI152_bin_mean_act","A_PRC_mask_MNI152_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","Memory",wroi)]
+tmp_dat$FittedMem <- fitted(a.rois.act_mem)
+tmp_dat$FittedMem_dm <- tmp_dat$FittedMem - ave(tmp_dat$FittedMem,tmp_dat$subj,FUN=mean)
+
+## VTA
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = A_VTA_50_noSN_bin_mean_act, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = A_VTA_50_noSN_bin_mean_act, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.2,.2)) +
+  labs(y="Δ Probability of Recall", x="Answer Phase BOLD (a.u)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_aVTA-Mem.pdf",sep="")
+  ggsave(fname, device=cairo_pdf)
+}
+
+## HPC
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = A_HPC_mean_act, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = A_HPC_mean_act, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.2,.2)) +
+  labs(y="Δ Probability of Recall", x="Answer Phase BOLD (a.u)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_aHPC-Mem.pdf",sep="")
+  ggsave(fname, device=cairo_pdf)
+}
+
+## PHC
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x =A_PRC_mask_MNI152_bin_mean_act, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = A_PRC_mask_MNI152_bin_mean_act, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.2,.2)) +
+  labs(y="Δ Probability of Recall", x="Answer Phase BOLD (a.u)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_aPRC-Mem.pdf",sep="")
+  ggsave(fname, device=cairo_pdf)
+}
+
+## PRC
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x =A_PRC_mask_MNI152_bin_mean_act, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = A_PRC_mask_MNI152_bin_mean_act, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.2,.2)) +
+  labs(y="Δ Probability of Recall", x="Answer Phase BOLD (a.u)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Uni_aPRC-Mem.pdf",sep="")
+  ggsave(fname, device=cairo_pdf)
+}
+```
+
+## **Convergence Analysis - Question**
+While anticipatory univariate HPC activity was not influenced by curiosity or subsequent memory, there may still be differences in distributed patterns of activation.
+
+Prior work has shown that MTL & HPC activity prior to learning can influence subsequent learning outcome. It has been proposed that activity in the HPC may spontaneously fluctuate in and out of a 'learning state'. However, little is known about how such learning state may be represented by multivariate activities within the MTL/HPC, and how they are influenced by neuromodulatory inputs from the VTA.
+
+Anna Karenina principle - Successful encoding is likely to arise from the convergence of multiple factors, while failed encoding can occur due to a multitude of factors. To this end, we expect that anticipatory states related to succesful encoding should occupy a more central position in state space (i.e. greater 'convergence'), while anticipatory states leading to failed encoding should exhibit greater entropy and to occupy more peripheral positions in state space. 
+
+For this analysis, activation for each trial is assume to occupy a single point in n-dimensional state space. To examine the 'convergence' of each point, the correlation distance of each point (trial) relative to a centroid (computed based on all other trials from a different run).It is expected that points occupying a central position would have a lower average distance (to all other points).
+
+To examine if convergence/centrality in state space is related to subsequent memory, we ran a simialr analysis examining the influence of curiosity on representational distance, and to examine if this was predictive of subsequent learning, a mixed-effects logistics regression was conducted on the trial by trial esimates with representation distance as a predictor for subsequent memory.
+
+Note: All analyses are performed on the non Z-scored distances, and z-scoring of the distances are plotted for visualization purposes.
+
+### HPC (Curiosity)
+```{r Anticipatory HPC distance - Curiosity}
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow",wroi)]
+colnames(tmp_dat)[3] <- "Dist"
+colnames(tmp_dat)[4] <- "Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+
+q.hpc.dist_cur <- lmer(Dist ~ curHighLow + (1|subj),data = tmp_dat, REML=F)
+summary(q.hpc.dist_cur)
+emmeans(q.hpc.dist_cur, list(pairwise ~ curHighLow), adjust = "tukey",pbkrtest.limit = 3188)
+
+### Plot
+tmp_dat <- tmp_dat %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_dat %>% group_by(curHighLow) %>% summarise(dist = mean(Dist), 
+                                                 dist_sem = sd(Dist)/sqrt(n()),
+                                                 distz = mean(DistZ),
+                                                 distz_sem = sd(DistZ)/sqrt(n())
+) 
+
+# Dot as mean
+ggplot() +
+  geom_point(data=tmp_dat, aes(x = as.numeric(curHighLow), y = DistZ, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_dat, aes(x=as.numeric(curHighLow), y = DistZ, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=distz), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=distz), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="HPC\nDistance from centroid (z)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_qHPC_cur.pdf",sep="")
+  ggsave(fname)
+}
+```
+We see a significant main effect of curiosity in the HPC with lower distances in High curiosity than low curiosity.
+
+# Additional plot for non-normalized HPC
+```{r}
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow",wroi)]
+colnames(tmp_dat)[3] <- "Dist"
+colnames(tmp_dat)[4] <- "Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+
+### Plot
+tmp_dat <- tmp_dat %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_dat %>% group_by(curHighLow) %>% summarise(dist = mean(Dist), 
+                                                 dist_sem = sd(Dist)/sqrt(n()),
+                                                 distz = mean(DistZ),
+                                                 distz_sem = sd(DistZ)/sqrt(n())
+) 
+
+# Dot as mean
+ggplot() +
+  geom_point(data=tmp_dat, aes(x = as.numeric(curHighLow), y = Dist, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_dat, aes(x=as.numeric(curHighLow), y = Dist, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=dist), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=dist), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=dist-dist_sem,ymax=dist+dist_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=dist-dist_sem,ymax=dist+dist_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="HPC\nDistance from centroid", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(revfigfldr, "fMRI_Dist_qHPC_cur_nonZ.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+
+### MTL-PHC (Curiosity)
+```{r}
+wroi <- c("Q_PHC_mask_MNI152_bin_p2c","Q_PHC_mask_MNI152_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow",wroi)]
+colnames(tmp_dat)[3] <- "Dist"
+colnames(tmp_dat)[4] <- "Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+
+q.phc.dist_cur <- lmer(Dist ~ curHighLow + (1|subj),data = tmp_dat, REML=F)
+summary(q.phc.dist_cur)
+
+### Plot
+tmp_dat <- tmp_dat %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_dat %>% group_by(curHighLow) %>% summarise(dist = mean(Dist), 
+                                                 dist_sem = sd(Dist)/sqrt(n()),
+                                                 distz = mean(DistZ),
+                                                 distz_sem = sd(DistZ)/sqrt(n())
+) 
+
+# Dot as mean
+ggplot() +
+  geom_point(data=tmp_dat, aes(x = as.numeric(curHighLow), y = DistZ, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_dat, aes(x=as.numeric(curHighLow), y = DistZ, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=distz), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=distz), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="PHC\nDistance from centroid (z)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_qPHC_cur.pdf",sep="")
+  ggsave(fname)
+}
+
+```
+No significant effect of curiosity on PHC.
+
+# Additional plot for non-normalized PHC
+```{r}
+wroi <- c("Q_PHC_mask_MNI152_bin_p2c","Q_PHC_mask_MNI152_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow",wroi)]
+colnames(tmp_dat)[3] <- "Dist"
+colnames(tmp_dat)[4] <- "Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+
+### Plot
+tmp_dat <- tmp_dat %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_dat %>% group_by(curHighLow) %>% summarise(dist = mean(Dist), 
+                                                 dist_sem = sd(Dist)/sqrt(n()),
+                                                 distz = mean(DistZ),
+                                                 distz_sem = sd(DistZ)/sqrt(n())
+) 
+
+# Dot as mean
+ggplot() +
+  geom_point(data=tmp_dat, aes(x = as.numeric(curHighLow), y = Dist, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_dat, aes(x=as.numeric(curHighLow), y = Dist, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=dist), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=dist), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=dist-dist_sem,ymax=dist+dist_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=dist-dist_sem,ymax=dist+dist_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="PHC\nDistance from centroid", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(revfigfldr, "fMRI_Dist_qPHC_cur_nonZ.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+### MTL-PRC (Curiosity)
+```{r}
+wroi <- c("Q_PRC_mask_MNI152_bin_p2c","Q_PRC_mask_MNI152_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow",wroi)]
+colnames(tmp_dat)[3] <- "Dist"
+colnames(tmp_dat)[4] <- "Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+
+q.prc.dist_cur <- lmer(Dist ~ curHighLow + (1|subj),data = tmp_dat, REML=F)
+summary(q.prc.dist_cur)
+
+### Plot
+tmp_dat <- tmp_dat %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_dat %>% group_by(curHighLow) %>% summarise(dist = mean(Dist), 
+                                                 dist_sem = sd(Dist)/sqrt(n()),
+                                                 distz = mean(DistZ),
+                                                 distz_sem = sd(DistZ)/sqrt(n())
+) 
+
+# Dot as mean
+ggplot() +
+  geom_point(data=tmp_dat, aes(x = as.numeric(curHighLow), y = DistZ, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_dat, aes(x=as.numeric(curHighLow), y = DistZ, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=distz), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=distz), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="PRC\nDistance from centroid (z)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_qPRC_cur.pdf",sep="")
+  ggsave(fname)
+}
+```
+No significant effect of curiosity in the PRC.
+
+# Additional plot for non-normalized PHC
+```{r}
+wroi <- c("Q_PRC_mask_MNI152_bin_p2c","Q_PRC_mask_MNI152_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow",wroi)]
+colnames(tmp_dat)[3] <- "Dist"
+colnames(tmp_dat)[4] <- "Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+
+### Plot
+tmp_dat <- tmp_dat %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_dat %>% group_by(curHighLow) %>% summarise(dist = mean(Dist), 
+                                                 dist_sem = sd(Dist)/sqrt(n()),
+                                                 distz = mean(DistZ),
+                                                 distz_sem = sd(DistZ)/sqrt(n())
+) 
+
+# Dot as mean
+ggplot() +
+  geom_point(data=tmp_dat, aes(x = as.numeric(curHighLow), y = Dist, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_dat, aes(x=as.numeric(curHighLow), y = Dist, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=dist), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=dist), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=dist-dist_sem,ymax=dist+dist_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=dist-dist_sem,ymax=dist+dist_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="PRC\nDistance from centroid", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(revfigfldr, "fMRI_Dist_qPRC_cur_nonZ.pdf",sep="")
+  ggsave(fname)
+}
+```
+Across the MTL ROIs, only the hippocampus showed a signifcant difference in convergence between High and Low curiosity.
+
+## **Mixed logistic regression to predict memory using representation distance - Question**
+```{r Anticipatory representational distance predicting memory}
+q.rois.dist_mem <- glmer(Memory ~Q_HPC_p2c + Q_PHC_mask_MNI152_bin_p2c + Q_PRC_mask_MNI152_bin_p2c + (1|subj), family = binomial, data=dist_raw)
+summary(q.rois.dist_mem)
+
+# Controlling for univariate activation in HPC
+q.rois.dist_mem2 <- glmer(Memory ~Q_HPC_p2c + Q_HPC_mean_act + Q_PHC_mask_MNI152_bin_p2c + Q_PRC_mask_MNI152_bin_p2c + (1|subj), family = binomial, data=dist_raw)
+summary(q.rois.dist_mem2)
+
+# Include curiosity as interaction term
+q.hpc.dist_mem_base <- glmer(Memory ~Q_HPC_p2c + (1|subj), family = binomial, data=dist_raw)
+q.hpc.dist_mem_cur <- glmer(Memory ~Q_HPC_p2c + Q_HPC_p2c:curHighLow + (1|subj), family = binomial, data=dist_raw)
+anova(q.hpc.dist_mem_base,q.hpc.dist_mem_cur)
+summary(q.hpc.dist_mem_cur)
+
+emSlope <- emtrends(q.hpc.dist_mem_cur, "curHighLow",var="Q_HPC_p2c")
+emSlope
+pairs(emSlope)
+
+q.rois.dist_mem3 <- glmer(Memory ~Q_HPC_p2c + Q_PHC_mask_MNI152_bin_p2c + Q_PRC_mask_MNI152_bin_p2c + Q_HPC_p2c:curHighLow + (1|subj), family = binomial, data=dist_raw)
+summary(q.rois.dist_mem3)
+
+```
+When including representation distance of all 3 MTL ROIs, only the HPC was a significant predictor.
+The HPC remained a significant predictor after controlling for univariate activation.
+
+The model that included curiosity as an interaction term led to a better model fit, suggesting a differential effect of HPC representation on memory in High and Low curiosity state. Followed-up comparison showed that convergence was a stronger predictor of memory in the Low curiosity condition. This may be driven by greater variability/range during low curiosity, whereas convergence is generally higher in the high curiosity condition.
+
+Inclusion of a HPC random slope term resulted in singular fit, and as such a random slope was not included. 
+
+Control analysis - Including curiosity as a continuous covariate
+```{r}
+q.rois.dist_mem_ctrl <- glmer(Memory ~Q_HPC_p2c + curiosityZ + (1|subj), family = binomial, data=dist_raw)
+summary(q.rois.dist_mem_ctrl)
+
+```
+As a control, we also used curiosity ratings (instead of category) as a covariate. HPC convergence remained a significant predictor of memory after controlling for curiosity ratings, suggesting that the association of HPC on memory, was not purely driven by differences in curiosity.
+
+Plot parameter estimates for distance and memory without interaction (Anticipation)
+```{r Plot PE for Distance predicting memory }
+betas<-fixef(q.rois.dist_mem)[2:4]
+odds<-exp(betas)
+se<-sqrt(diag(vcov(q.rois.dist_mem)))[2:4]
+oddse<-sqrt(odds^2 * se)
+pdat<-data.frame(betas)
+pdat$odds<-odds
+pdat$se<-se
+pdat$oddse<-oddse
+
+rownames<-c(
+            "HPC\nDistance\n",
+            "PHC\nDistance\n",
+            "PRC\nDistance\n")
+
+sortedrownames<-c( "HPC\nDistance\n",
+                   "PHC\nDistance\n",
+                   "PRC\nDistance\n")
+
+sortedrownames2<-c( 
+                    "PRC\nDistance\n",
+                    "PHC\nDistance\n",
+                    "HPC\nDistance\n")
+
+
+pdat$labels<-rownames
+pdat$labels <-factor(pdat$labels,levels=sortedrownames)
+
+## Beta on X-axis
+ggplot(pdat,aes(x=betas,y=labels)) +
+  geom_point(data=pdat, aes(x=betas,y=labels), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(y=labels, xmin=betas-se,xmax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_vline(xintercept=0,linetype="dashed")  +
+  labs(y="", x="Parameter Estimate") + 
+  coord_cartesian(xlim=c(-0.9,0.5)) +
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_Q_Mem_PE1.pdf",sep="")
+  ggsave(fname)
+}
+
+pdat$labels <-factor(pdat$labels,levels=sortedrownames2)
+## Beta on Y-axis
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_point(data=pdat, aes(x=labels,y=betas), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="dashed")  +
+  labs(x="", y="Parameter Estimate") + 
+  coord_cartesian(ylim=c(-0.9,0.5)) +
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_Q_Mem_PE2.pdf",sep="")
+  ggsave(fname)
+}
+
+## Beta on Y-axis (bar graphs)
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_bar(data=pdat, aes(x=labels,y=betas),alpha=1,show.legend=F, stat="identity", width=.6, color="black") + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="solid")  +
+  labs(x="", y="Parameter Estimate") + 
+  coord_cartesian(ylim=c(-0.9,0.5)) +
+  annotate(x=3,y= -.9, geom="text",label="**",size=10) +
+  theme_classic(base_size=theme_bs) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_Q_Mem_PE_bar.pdf",sep="")
+  ggsave(fname)
+}
+
+## Separate PE plot for each ROI
+for (i in 1:3){
+  pdat_t = pdat[i,]
+  ggplot(pdat_t,aes(x=labels,y=betas)) +
+    geom_bar(data=pdat_t, aes(x=labels,y=betas),alpha=1,show.legend=F, stat="identity", width=1, color="black") + 
+    geom_errorbar(data=pdat_t,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+    geom_hline(yintercept=0,linetype="solid")  +
+    labs(x="", y="Parameter Estimate") + 
+    coord_cartesian(ylim=c(-0.9,0.5),xlim=c(.5,1.5)) +
+    theme_classic(base_size=theme_bs) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),axis.ticks.x=element_blank(), axis.text.x=element_blank())
+  wroi <- substr(pdat_t$labels,1,3)
+  if (figsave == 1){
+    fname <-paste(figfldr,wroi , "_Dist_Q_Mem_PE_", plotbar_width, ".pdf",sep="")
+    ggsave(fname, width=plotbar_width,height=4.5)
+  }
+}
+```
+
+Slopes for each ROI on predicted memory outcome (Anticipation)
+```{r}
+wroi <- c("Q_HPC_p2c", "Q_PHC_mask_MNI152_bin_p2c", "Q_PRC_mask_MNI152_bin_p2c")
+tmp_dat <- dist_raw[c("subj","curHighLow","Memory",wroi)]
+tmp_dat$FittedMem <- fitted(q.rois.dist_mem)
+tmp_dat$FittedMem_dm <- tmp_dat$FittedMem - ave(tmp_dat$FittedMem,tmp_dat$subj,FUN=mean)
+
+## HPC
+tmp_dat$HPC_p2cZ <- ave(tmp_dat$Q_HPC_p2c,tmp_dat$subj,FUN=scale)
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = HPC_p2cZ, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = HPC_p2cZ, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.1,.1)) +
+  labs(y="Δ Probability of Recall", x="Distance from centroid (z)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_qHPC-Mem.pdf",sep="")
+  ggsave(fname, device=cairo_pdf)
+}
+
+## PHC
+tmp_dat$PHC_p2cZ <- ave(tmp_dat$Q_PHC_mask_MNI152_bin_p2c,tmp_dat$subj,FUN=scale)
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = PHC_p2cZ, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = PHC_p2cZ, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.1,.1)) +
+  labs(y="Δ Probability of Recall", x="Distance from centroid (z)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_qPHC-Mem.pdf",sep="")
+  ggsave(fname, device=cairo_pdf)
+}
+
+## PRC
+tmp_dat$PRC_p2cZ <- ave(tmp_dat$Q_PRC_mask_MNI152_bin_p2c,tmp_dat$subj,FUN=scale)
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = PRC_p2cZ, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = PRC_p2cZ, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.1,.1)) +
+  labs(y="Δ Probability of Recall", x="Distance from centroid (z)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_qPRC-Mem.pdf",sep="")
+  ggsave(fname, device=cairo_pdf)
+}
+```
+Slopes for each ROI on predicted memory outcome (Anticipation) - Non Z-scored
+```{r}
+wroi <- c("Q_HPC_p2c", "Q_PHC_mask_MNI152_bin_p2c", "Q_PRC_mask_MNI152_bin_p2c")
+tmp_dat <- dist_raw[c("subj","curHighLow","Memory",wroi)]
+tmp_dat$FittedMem <- fitted(q.rois.dist_mem)
+tmp_dat$FittedMem_dm <- tmp_dat$FittedMem - ave(tmp_dat$FittedMem,tmp_dat$subj,FUN=mean)
+
+## HPC
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_HPC_p2c, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_HPC_p2c, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.1,.1)) +
+  labs(y="Δ Probability of Recall", x="Distance from centroid") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+   fname <-paste(revfigfldr, "fMRI_Dist_qHPC-Mem_nonZ.pdf",sep="")
+   ggsave(fname, device=cairo_pdf)
+}
+
+## PHC
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_PHC_mask_MNI152_bin_p2c, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_PHC_mask_MNI152_bin_p2c, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.1,.1)) +
+  labs(y="Δ Probability of Recall", x="Distance from centroid") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+   fname <-paste(revfigfldr, "fMRI_Dist_qPHC-Mem_nonZ.pdf",sep="")
+   ggsave(fname, device=cairo_pdf)
+}
+
+## PRC
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_PRC_mask_MNI152_bin_p2c, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = Q_PRC_mask_MNI152_bin_p2c, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.1,.1)) +
+  labs(y="Δ Probability of Recall", x="Distance from centroid") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+   fname <-paste(revfigfldr, "fMRI_Dist_qPRC-Mem_nonZ.pdf",sep="")
+   ggsave(fname, device=cairo_pdf)
+}
+```
+
+
+Just as with the univariate data, the same analyses were repeated for the answer phase.
+## **Convergence Analysis - Answer**
+### HPC (Curiosity)
+```{r}
+wroi <- c("A_HPC_p2c","A_HPC_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow",wroi)]
+colnames(tmp_dat)[3] <- "Dist"
+colnames(tmp_dat)[4] <- "Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+tmp_dat$ActZ <- ave(tmp_dat$Act,tmp_dat$subj,FUN=scale)
+
+
+a.hpc.dist_cur <- lmer(Dist ~ curHighLow + (1|subj),data = tmp_dat, REML=F)
+summary(a.hpc.dist_cur)
+
+### Plot
+tmp_dat <- tmp_dat %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_dat %>% group_by(curHighLow) %>% summarise(dist = mean(Dist), 
+                                                 dist_sem = sd(Dist)/sqrt(n()),
+                                                 distz = mean(DistZ),
+                                                 distz_sem = sd(DistZ)/sqrt(n())
+) 
+
+# Dot as mean
+ggplot() +
+  geom_point(data=tmp_dat, aes(x = as.numeric(curHighLow), y = DistZ, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_dat, aes(x=as.numeric(curHighLow), y = DistZ, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=distz), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=distz), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="HPC\nDistance from centroid (z)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_aHPC_cur.pdf",sep="")
+  ggsave(fname)
+}
+```
+There was no effect of curiosity in the HPC during answer.
+
+### MTL-PHC (Curiosity)
+```{r}
+wroi <- c("A_PHC_mask_MNI152_bin_p2c","A_PHC_mask_MNI152_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow",wroi)]
+colnames(tmp_dat)[3] <- "Dist"
+colnames(tmp_dat)[4] <- "Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+tmp_dat$ActZ <- ave(tmp_dat$Act,tmp_dat$subj,FUN=scale)
+
+
+anova(a.phc.dist_cur <- lmer(Dist ~ curHighLow + (1|subj),data = tmp_dat, REML=F))
+summary(a.phc.dist_cur)
+
+### Plot
+tmp_dat <- tmp_dat %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_dat %>% group_by(curHighLow) %>% summarise(dist = mean(Dist), 
+                                                 dist_sem = sd(Dist)/sqrt(n()),
+                                                 distz = mean(DistZ),
+                                                 distz_sem = sd(DistZ)/sqrt(n())
+) 
+
+# Dot as mean
+ggplot() +
+  geom_point(data=tmp_dat, aes(x = as.numeric(curHighLow), y = DistZ, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_dat, aes(x=as.numeric(curHighLow), y = DistZ, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=distz), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=distz), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  labs(y="PHC\nDistance from centroid (z)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_aPHC_cur.pdf",sep="")
+  ggsave(fname)
+}
+```
+No effect of curiosity in the PHC.
+
+### MTL-PRC (Curiosity)
+```{r}
+wroi <- c("A_PRC_mask_MNI152_bin_p2c","A_PRC_mask_MNI152_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow",wroi)]
+colnames(tmp_dat)[3] <- "Dist"
+colnames(tmp_dat)[4] <- "Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+tmp_dat$ActZ <- ave(tmp_dat$Act,tmp_dat$subj,FUN=scale)
+
+
+anova(a.prc.dist_cur <- lmer(Dist ~ curHighLow + (1|subj),data = tmp_dat, REML=F))
+summary(a.prc.dist_cur)
+
+### Plot
+tmp_dat <- tmp_dat %>% group_by(subj,curHighLow) %>% summarise_all(mean)
+tmp = tmp_dat %>% group_by(curHighLow) %>% summarise(dist = mean(Dist), 
+                                                 dist_sem = sd(Dist)/sqrt(n()),
+                                                 distz = mean(DistZ),
+                                                 distz_sem = sd(DistZ)/sqrt(n())
+) 
+
+# Dot as mean
+ggplot() +
+  geom_point(data=tmp_dat, aes(x = as.numeric(curHighLow), y = DistZ, colour = curHighLow), size = sub_dotsize, shape = 20,alpha=sub_dotalpha,show.legend=F) + 
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  geom_line(data=tmp_dat, aes(x=as.numeric(curHighLow), y = DistZ, group=subj),  color = 'lightgray', alpha = line_alpha) + 
+  geom_point(data=tmp %>% filter(curHighLow=="0"), aes(x=curHighLow,y=distz), position = position_nudge(x = +.35), color=lcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_point(data=tmp %>% filter(curHighLow=="1"), aes(x=curHighLow,y=distz), position = position_nudge(x = -.35), color=hcolor1, size= mean_dotsize, alpha=mean_dotalpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="0") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = +.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  geom_errorbar(data=tmp %>% filter(curHighLow=="1") ,aes(x=curHighLow, ymin=distz-distz_sem,ymax=distz+distz_sem),position = position_nudge(x = -.35), width=erbar_width,lwd=erbar_thick,alpha=erbar_alpha) +
+  guides(fill=guide_legend(title="Curiosity")) +
+  #labs(y="PRC Representation\nDistance (z)", x="",color="Curiosity") + 
+  labs(y="PRC\nDistance from centroid (z)", x="",color="Curiosity") + 
+  scale_x_discrete(name = "Curiosity", labels=c("High","Low"), breaks=c("1","0"),expand=c(.3,.3)) + 
+  theme_classic(base_size=theme_bs)
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_aPRC_cur.pdf",sep="")
+  ggsave(fname)
+}
+```
+No effect of curiosity in the PRC.
+
+Across all 3 MTL ROIs, there was no effect of curiosity on convergence during the presentation of answers.
+
+## **Mixed logistic regression to predict memory using representation distance - Answer**
+The same analysis was conducted to examined if convergence during Answer phase is associated with memory performance.
+```{r Answer phase representation predicting memory}
+a.rois.dist_mem <- glmer(Memory ~ A_HPC_p2c + A_PHC_mask_MNI152_bin_p2c + A_PRC_mask_MNI152_bin_p2c + (1|subj), family = binomial, data=dist_raw)
+summary(a.rois.dist_mem)
+
+
+#Controlling for univariate activation of PHC and PRC
+a.rois.dist_act_mem <- glmer(Memory ~ A_HPC_p2c + A_PHC_mask_MNI152_bin_p2c + A_PRC_mask_MNI152_bin_p2c + A_PHC_mask_MNI152_bin_mean_act + A_PRC_mask_MNI152_bin_mean_act + (1|subj), family = binomial, data=dist_raw,control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+summary(a.rois.dist_act_mem)
+
+# Interaction with curiosity
+a.rois.dist_mem2 <- glmer(Memory ~ A_HPC_p2c + A_PHC_mask_MNI152_bin_p2c + A_PRC_mask_MNI152_bin_p2c + (A_PHC_mask_MNI152_bin_p2c + A_PRC_mask_MNI152_bin_p2c):curHighLow + (1|subj), family = binomial, data=dist_raw)
+summary(a.rois.dist_mem2)
+anova(a.rois.dist_mem,a.rois.dist_mem2)
+
+emSlope_phc <- emtrends(a.rois.dist_mem2, "curHighLow",var="A_PHC_mask_MNI152_bin_p2c")
+emSlope_phc
+pairs(emSlope_phc)
+
+emSlope_prc <- emtrends(a.rois.dist_mem2, "curHighLow",var="A_PRC_mask_MNI152_bin_p2c")
+emSlope_prc
+pairs(emSlope_prc)
+
+# Random slope model
+a.rois.dist_mem3 <-  glmer(Memory ~ A_HPC_p2c + A_PHC_mask_MNI152_bin_p2c + A_PRC_mask_MNI152_bin_p2c + (A_PHC_mask_MNI152_bin_p2c + A_PRC_mask_MNI152_bin_p2c):curHighLow + (1 + A_PHC_mask_MNI152_bin_p2c|subj), family = binomial, data=dist_raw,control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=5000)))
+anova(a.rois.dist_mem2,a.rois.dist_mem3)
+```
+During answer phase, PRC and PHC are significant predictors and remained significant after controlling for univariate activation.
+There was a significant interaction of both parameters with curiosity. In both PRC and PHC, this was driven by a steeper slope during low curiosity trials than during high curiosity trials.
+The inclusion of a PRC random slope led to a singular fit, and the inclusion of PHC random slope did not lead to better fit.
+
+Plot parameter estimates without interaction (Answer)
+```{r}
+betas<-fixef(a.rois.dist_mem)[2:4]
+odds<-exp(betas)
+se<-sqrt(diag(vcov(a.rois.dist_mem)))[2:4]
+oddse<-sqrt(odds^2 * se)
+pdat<-data.frame(betas)
+pdat$odds<-odds
+pdat$se<-se
+pdat$oddse<-oddse
+
+rownames<-c(
+            "HPC\nDistance\n",
+            "PHC\nDistance\n",
+            "PRC\nDistance\n")
+
+sortedrownames<-c( "HPC\nDistance\n",
+                   "PHC\nDistance\n",
+                   "PRC\nDistance\n")
+
+sortedrownames2<-c( 
+                    "PRC\nDistance\n",
+                    "PHC\nDistance\n",
+                    "HPC\nDistance\n")
+
+
+pdat$labels<-rownames
+pdat$labels <-factor(pdat$labels,levels=sortedrownames)
+
+## Beta on X-axis
+ggplot(pdat,aes(x=betas,y=labels)) +
+  geom_point(data=pdat, aes(x=betas,y=labels), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(y=labels, xmin=betas-se,xmax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_vline(xintercept=0,linetype="dashed")  +
+  labs(y="", x="Parameter Estimate") + 
+  coord_cartesian(xlim=c(-0.9,0.8)) +
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  #fname <-paste(figfldr, "fMRI_Dist_A_Mem_PE1.eps",sep="")
+  #ggsave(fname, device=cairo_ps)
+}
+
+pdat$labels <-factor(pdat$labels,levels=sortedrownames2)
+## Beta on Y-axis
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_point(data=pdat, aes(x=labels,y=betas), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="dashed")  +
+  labs(x="", y="Parameter Estimate") + 
+  coord_cartesian(ylim=c(-0.9,0.8)) +
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  #fname <-paste(figfldr, "fMRI_Dist_A_Mem_PE2.eps",sep="")
+  #ggsave(fname, device=cairo_ps)
+}
+
+## Beta on Y-axis (bar graphs)
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_bar(data=pdat, aes(x=labels,y=betas),alpha=1,show.legend=F, stat="identity", width=.6, color="black") + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="solid")  +
+  labs(x="", y="Parameter Estimate") + 
+  coord_cartesian(ylim=c(-0.9,0.8)) +
+  #annotate(x=1,y= -.9, geom="text",label="**",size=10) +
+  theme_classic(base_size=theme_bs) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+if (figsave == 1){
+  #fname <-paste(figfldr, "fMRI_Dist_A_Mem_PE_bar.eps",sep="")
+  #ggsave(fname, device=cairo_ps)
+}
+
+## Separate PE plot for each ROI
+for (i in 1:3){
+  pdat_t = pdat[i,]
+  ggplot(pdat_t,aes(x=labels,y=betas)) +
+    geom_bar(data=pdat_t, aes(x=labels,y=betas),alpha=1,show.legend=F, stat="identity", width=1, color="black") + 
+    geom_errorbar(data=pdat_t,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+    geom_hline(yintercept=0,linetype="solid")  +
+    labs(x="", y="Parameter Estimate") + 
+    #annotate(x=1,y=.2,geom="text",label="*",size=10) +
+    coord_cartesian(ylim=c(-0.9,0.5),xlim=c(.5,1.5)) +
+    theme_classic(base_size=theme_bs) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),axis.ticks.x=element_blank(), axis.text.x=element_blank())
+  wroi <- substr(pdat_t$labels,1,3)
+  if (figsave == 1){
+    fname <-paste(figfldr,wroi , "_Dist_A_Mem_PE_", plotbar_width, ".pdf",sep="")
+    ggsave(fname, width=plotbar_width,height=4.5)
+  }
+}
+```
+
+Slopes for each ROI on predicted memory outcome (Answer)
+```{r}
+wroi <- c("A_HPC_p2c", "A_PHC_mask_MNI152_bin_p2c", "A_PRC_mask_MNI152_bin_p2c")
+tmp_dat <- dist_raw[c("subj","curHighLow","Memory",wroi)]
+tmp_dat$FittedMem <- fitted(a.rois.dist_mem)
+tmp_dat$FittedMem_dm <- tmp_dat$FittedMem - ave(tmp_dat$FittedMem,tmp_dat$subj,FUN=mean)
+
+## HPC
+tmp_dat$HPC_p2cZ <- ave(tmp_dat$A_HPC_p2c,tmp_dat$subj,FUN=scale)
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = HPC_p2cZ, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = HPC_p2cZ, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.15,.15)) +
+  labs(y="Δ Probability of Recall", x="Distance from centroid (z)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_aHPC-Mem.pdf",sep="")
+  #ggsave(fname, device=cairo_ps)
+  ggsave(fname, device=cairo_pdf)
+}
+
+## PHC
+tmp_dat$PHC_p2cZ <- ave(tmp_dat$A_PHC_mask_MNI152_bin_p2c,tmp_dat$subj,FUN=scale)
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = PHC_p2cZ, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = PHC_p2cZ, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.15,.15)) +
+  labs(y="Δ Probability of Recall", x="Distance from centroid (z)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_aPHC-Mem.pdf",sep="")
+  #ggsave(fname, device=cairo_ps)
+  ggsave(fname, device=cairo_pdf)
+}
+
+## PRC
+tmp_dat$PRC_p2cZ <- ave(tmp_dat$A_PRC_mask_MNI152_bin_p2c,tmp_dat$subj,FUN=scale)
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = PRC_p2cZ, y = FittedMem_dm, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = PRC_p2cZ, y = FittedMem_dm), color='black',size=1.8, alpha=.8, se=FALSE) +
+  coord_cartesian(ylim=c(-.15,.15)) +
+  labs(y="Δ Probability of Recall", x="Distance from centroid (z)") +
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_Dist_aPRC-Mem.pdf",sep="")
+  #ggsave(fname, device=cairo_ps)
+  ggsave(fname, device=cairo_pdf)
+}
+```
+
+
+Plot parameter estimates WITH interaction (Answer)
+```{r}
+betas<-fixef(a.rois.dist_mem2)[2:6]
+odds<-exp(betas)
+se<-sqrt(diag(vcov(a.rois.dist_mem2)))[2:6]
+oddse<-sqrt(odds^2 * se)
+pdat<-data.frame(betas)
+pdat$odds<-odds
+pdat$se<-se
+pdat$oddse<-oddse
+
+rownames<-c(
+            "HPC\nDistance\n",
+            "PHC\nDistance\n",
+            "PRC\nDistance\n",
+            "PHC\nx\nCuriosity\n",
+            "PRC\nx\nCuriosity\n")
+
+sortedrownames<-c( "PHC\nx\nCuriosity\n",
+                   "PRC\nx\nCuriosity\n",
+                   "HPC\nDistance\n",
+                   "PHC\nDistance\n",
+                   "PRC\nDistance\n")
+
+sortedrownames2<-c( 
+                    "PRC\nDistance\n",
+                    "PHC\nDistance\n",
+                    "HPC\nDistance\n",
+                    "PRC\nx\nCuriosity\n",
+                    "PHC\nx\nCuriosity\n")
+
+pdat$labels<-rownames
+pdat$labels <-factor(pdat$labels,levels=sortedrownames)
+
+## Beta on X-axis
+ggplot(pdat,aes(x=betas,y=labels)) +
+  geom_point(data=pdat, aes(x=betas,y=labels), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(y=labels, xmin=betas-se,xmax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_vline(xintercept=0,linetype="dashed")  +
+  labs(y="", x="Parameter Estimate") + 
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  #fname <-paste(figfldr, "fMRI_Dist_A_Mem_PE1.eps",sep="")
+  #ggsave(fname, device=cairo_ps)
+}
+
+pdat$labels <-factor(pdat$labels,levels=sortedrownames2)
+## Beta on Y-axis
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_point(data=pdat, aes(x=labels,y=betas), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="dashed")  +
+  labs(x="", y="Parameter Estimate") + 
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  #fname <-paste(figfldr, "fMRI_Dist_A_Mem_PE2.eps",sep="")
+  #ggsave(fname, device=cairo_ps)
+}
+
+## Beta on Y-axis (bar graphs)
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_bar(data=pdat, aes(x=labels,y=betas),alpha=1,show.legend=F, stat="identity", width=.6, color="black") + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="solid")  +
+  labs(x="", y="Parameter Estimate") + 
+  theme_classic(base_size=theme_bs) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+if (figsave == 1){
+  #fname <-paste(figfldr, "fMRI_Dist_A_Mem_PE_bar.eps",sep="")
+  #ggsave(fname, device=cairo_ps)
+}
+```
+
+## **Distance Analysis with VTA**
+To examine the relationship between VTA activation and representational distance, trial level univariate VTA activation was used as a predictor for trial level Representational distance.
+
+```{r VTA activation on HPC convergence}
+## HPC Distance
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act","Q_VTA_50_noSN_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","Memory",wroi)]
+colnames(tmp_dat)[4] <- "Dist"
+colnames(tmp_dat)[5] <- "Act"
+colnames(tmp_dat)[6] <- "VTA_Act"
+
+q.hpc.dist_vta <- lmer(Dist ~ VTA_Act + (1|subj),data = tmp_dat, REML=F)
+summary(q.hpc.dist_vta)
+q.hpc.dist_vta_rand <- lmer(Dist ~ VTA_Act + (1 + VTA_Act|subj),data = tmp_dat, control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=5000)))
+summary(q.hpc.dist_vta_rand)
+anova(q.hpc.dist_vta,q.hpc.dist_vta_rand)
+
+# Controlling for univariate activation in HPC
+q.hpc.dist_vta_hpc <- lmer(Dist ~ VTA_Act + Act + (1 + VTA_Act|subj),data = tmp_dat, REML=F)
+summary(q.hpc.dist_vta_hpc)
+anova(q.hpc.dist_vta_rand,q.hpc.dist_vta_hpc)
+
+# Controlling for Curiosity state
+q.hpc.dist_vta_cur <- lmer(Dist ~ VTA_Act + VTA_Act:curHighLow + (1 + VTA_Act|subj),data = tmp_dat, REML=F)
+anova(q.hpc.dist_vta_rand,q.hpc.dist_vta_cur)
+
+## VTA-HPC relation using only Low curiosity trials
+tmp_dat2 <-subset(tmp_dat,curHighLow==0)
+q.hpc.dist_vta_lc <- lmer(Dist ~ VTA_Act + (1 |subj),data = tmp_dat2, REML=F)
+summary(q.hpc.dist_vta_lc)
+q.hpc.dist_vta_rand_lc <- lmer(Dist ~ VTA_Act + (1 + VTA_Act |subj),data = tmp_dat2, control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=5000)))
+summary(q.hpc.dist_vta_rand_lc)
+anova(q.hpc.dist_vta_lc,q.hpc.dist_vta_rand_lc)
+
+```
+VTA was a significant predictor of representation distance in the HPC, This remained significant after controlling for univariate HPC actviation and controlling for curiosity states.
+The inclusion of a VTA random slope resulted in a better model fit, so all models included VTA as a random slope.
+Note that when both VTA and Curiosity are included as regressors, only VTA was a significant predictor.
+
+
+Plot parameter estimate of VTA
+```{r}
+betas<-fixef(q.hpc.dist_vta_rand)[2]
+odds<-exp(betas)
+se<-sqrt(diag(vcov(q.hpc.dist_vta_rand)))[2]
+oddse<-sqrt(odds^2 * se)
+pdat<-data.frame(betas)
+pdat$odds<-odds
+pdat$se<-se
+pdat$oddse<-oddse
+
+rownames<-c("VTA\nActivation\n")
+pdat$labels<-rownames
+
+
+## Beta on X-axis
+ggplot(pdat,aes(x=betas,y=labels)) +
+  geom_point(data=pdat, aes(x=betas,y=labels), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(y=labels, xmin=betas-se,xmax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_vline(xintercept=0,linetype="dashed")  +
+  labs(y="", x="Parameter Estimate") + 
+  coord_cartesian(xlim=c(-0.09,0.05)) +
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  #fname <-paste(figfldr, "fMRI_Dist_Q_Mem_PE1.eps",sep="")
+  #ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_VTA_Q_HPC_Dist_PE1.pdf",sep="")
+  ggsave(fname)
+}
+
+## Beta on Y-axis
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_point(data=pdat, aes(x=labels,y=betas), size = mean_dotsize, shape = 20,alpha=1,show.legend=F) + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="dashed")  +
+  labs(x="", y="Parameter Estimate") + 
+  coord_cartesian(ylim=c(-0.09,0.05)) +
+  theme_bw(base_size=theme_bs) 
+if (figsave == 1){
+  #fname <-paste(figfldr, "fMRI_Dist_Q_Mem_PE2.eps",sep="")
+  #ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_VTA_Q_HPC_Dist_PE2.pdf",sep="")
+  ggsave(fname)
+}
+
+## Beta on Y-axis (bar graphs)  
+ggplot(pdat,aes(x=labels,y=betas)) +
+  geom_bar(data=pdat, aes(x=labels,y=betas),alpha=1,show.legend=F, stat="identity", width=.6, color="black") + 
+  geom_errorbar(data=pdat,aes(x=labels, ymin=betas-se,ymax=betas+se), width=0,lwd=1,alpha=erbar_alpha) + 
+  geom_hline(yintercept=0,linetype="solid")  +
+  labs(x="", y="Parameter Estimate") + 
+  coord_cartesian(ylim=c(-0.09,0.05)) +
+  theme_classic(base_size=theme_bs) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),axis.ticks.x=element_blank(), axis.text.x=element_blank())
+if (figsave == 1){
+  #fname <-paste(figfldr, "fMRI_Dist_Q_Mem_PE_bar.eps",sep="")
+  #ggsave(fname, device=cairo_ps)
+  fname <-paste(figfldr, "fMRI_VTA_Q_HPC_Dist_PE_bar_", plotbar_width, ".pdf",sep="")
+  ggsave(fname, width=plotbar_width,height=4.5)
+}
+
+
+```
+
+
+Plot relationship of VTA activation and HPC distance
+```{r}
+## Plot VTA-HPC distance (raw)
+## Combine across Curiosity states (use data from q.hpc.dist_vta_hpc_rand_cur)
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act","Q_VTA_50_noSN_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","Memory",wroi)]
+colnames(tmp_dat)[4] <- "Dist"
+colnames(tmp_dat)[5] <- "Act"
+colnames(tmp_dat)[6] <- "VTA_Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+tmp_dat$ActZ <- ave(tmp_dat$Act,tmp_dat$subj,FUN=scale)
+tmp_dat$VTA_ActZ <- ave(tmp_dat$VTA_Act,tmp_dat$sub,FUN=scale)
+tmp_dat$FittedDist <- predict(q.hpc.dist_vta_rand)
+tmp_dat$FittedDistZ <- ave(tmp_dat$FittedDist, tmp_dat$subj,FUN=scale)
+
+ggplot() + 
+   geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = VTA_Act, y = FittedDist, group = subj), colour = "lightgray",size=1, alpha=0.4, se=FALSE,show.legend=F) + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = VTA_Act, y = FittedDist), color='black',size=1.8, alpha=.8, se=FALSE) +
+  labs(y="HPC\nDistance from centroid", x="Anticipatory VTA BOLD (a.u)") + 
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_VTA-qHPC_raw.pdf",sep="")
+  ggsave(fname)
+}
+
+## With raw scatter (mean slope)
+ggplot() + 
+    geom_point(data=dist_raw,aes(x=Q_VTA_50_noSN_bin_mean_act,y=Q_HPC_p2c),alpha=.05,show.legend=F) +
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = VTA_Act, y = FittedDist), color='black',size=1.8, alpha=.8, se=FALSE) +
+  labs(y="HPC\nDistance from centroid", x="Anticipatory VTA BOLD (a.u)") + 
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_VTA-qHPC_raw_meanslope_scatter.pdf",sep="")
+  ggsave(fname)
+}
+
+## With raw scatter (individual slope)
+ggplot() + 
+    geom_point(data=dist_raw,aes(x=Q_VTA_50_noSN_bin_mean_act,y=Q_HPC_p2c),alpha=.05,show.legend=F) +
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = VTA_Act, y = FittedDist, group = subj), colour = "black",size=1, alpha=.8, se=FALSE,show.legend=F) + 
+  labs(y="HPC\nDistance from centroid", x="Anticipatory VTA BOLD (a.u)") + 
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_VTA-qHPC_raw_indivslope_scatter.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+Separate plot for each curiosity level
+```{r}
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act","Q_VTA_50_noSN_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","Memory",wroi)]
+colnames(tmp_dat)[4] <- "Dist"
+colnames(tmp_dat)[5] <- "Act"
+colnames(tmp_dat)[6] <- "VTA_Act"
+tmp_dat$DistZ <- ave(tmp_dat$Dist,tmp_dat$subj,FUN=scale)
+tmp_dat$ActZ <- ave(tmp_dat$Act,tmp_dat$subj,FUN=scale)
+tmp_dat$VTA_ActZ <- ave(tmp_dat$VTA_Act,tmp_dat$sub,FUN=scale)
+tmp_dat$FittedDist <- predict(q.hpc.dist_vta_cur)
+tmp_dat_hc <- subset(tmp_dat,tmp_dat$curHighLow==1)
+tmp_dat_lc <- subset(tmp_dat,tmp_dat$curHighLow==0)
+tmp_dat_hc$FittedDistZ <- ave(tmp_dat_hc$FittedDist,tmp_dat_hc$subj,FUN=scale)
+tmp_dat_lc$FittedDistZ <- ave(tmp_dat_lc$FittedDist,tmp_dat_lc$subj,FUN=scale)
+tmp_dat <-rbind(tmp_dat_hc,tmp_dat_lc)
+
+
+ggplot() + 
+    geom_line(data=tmp_dat,stat="smooth",method="lm", aes(x = VTA_Act, y = FittedDist,color=curHighLow),size=1.8, alpha=.8, se=FALSE) +
+  scale_color_manual(values=c(lcolor1,hcolor1),breaks=c("0","1"),labels=c("Low","High")) + 
+  guides(color=guide_legend(reverse=TRUE)) +
+  coord_cartesian(ylim=c(0.25,1.25)) +
+  labs(y="Predicted Distance", x="Anticipatory VTA BOLD (a.u)",color = "Curiosity") + 
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+if (figsave == 1){
+  fname <-paste(figfldr, "fMRI_VTA-qHPC_Cur_raw.pdf",sep="")
+  ggsave(fname)
+}
+```
+
+## **VTA Activation and HPC representation on memory**
+To examine if VTA and HPC contributed unique variance a hierarhical regression was performed to examine if inclusion of the factors resulted in better model fit.
+
+```{r Mediation of VTA-HPC-Memory}
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act","Q_VTA_50_noSN_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","Memory",wroi)]
+colnames(tmp_dat)[4] <- "Dist"
+colnames(tmp_dat)[5] <- "Act"
+colnames(tmp_dat)[6] <- "VTA_Act"
+
+# Individual models
+m1 <- glmer(Memory ~ VTA_Act + (1|subj), family = binomial, data=tmp_dat)
+m2 <- glmer(Dist ~ VTA_Act + (1|subj),data = tmp_dat)
+m3 <- glmer( Memory ~ VTA_Act + Dist + (1|subj),family=binomial,data=tmp_dat)
+m4 <- glmer( Memory ~ Dist + (1|subj),family=binomial,data=tmp_dat)
+
+# Model Comparison
+anova(m3,m1)
+anova(m3,m4)
+
+# Mediation
+results <- mediate(m2,m3,treat="VTA_Act",mediator="Dist",boot=F,sims=1000)
+summary(results)
+#summary(results,output="byeffect")
+#plot(results)
+
+# Test mediation with control and treatment contrasting 25th and 75th percentile for VTA activity
+results2<-mediate(m2,m3,treat="VTA_Act",mediator="Dist",control.value=-.4,treat.value=.72,boot=F,sims=1000)
+summary(results2)
+
+```
+
+## **Individual difference analysis**
+```{r}
+## Compute individual behavioral performance
+tmp_beh <- beh_avg2[c("subj","curHighLow","mem")]
+tmp_beh2 <- spread(tmp_beh,curHighLow,mem)
+colnames(tmp_beh2)[2:3] <- c("Low","High")
+tmp_beh2$Avg <- (tmp_beh2$Low + tmp_beh2$High)/2
+tmp_beh2$Diff <- (tmp_beh2$High - tmp_beh2$Low)
+
+## Brain Measures
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act","Q_VTA_50_noSN_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","Memory",wroi)]
+colnames(tmp_dat)[4] <- "Dist"
+colnames(tmp_dat)[5] <- "Act"
+colnames(tmp_dat)[6] <- "VTA_Act"
+
+## VTA activation
+avg_vta <- aggregate(VTA_Act~subj*curHighLow,tmp_dat,mean)
+colnames(avg_vta)[3]<-"VTA"
+avg_vta <- spread(avg_vta,curHighLow,VTA)
+colnames(avg_vta)[2:3] <- c("VTA_Low","VTA_High")
+avg_vta$VTA_Avg <- (avg_vta$VTA_High + avg_vta$VTA_Low) / 2
+avg_vta$VTA_Diff <- (avg_vta$VTA_High - avg_vta$VTA_Low) #/ (avg_vta$VTA_High + avg_vta$VTA_Low)
+
+tmp_dat2 <- merge(tmp_beh2,avg_vta,by="subj")
+
+## HPC Distance
+avg_dist <- aggregate(Dist~subj * curHighLow,tmp_dat,mean)
+colnames(avg_dist)[3]<-"Dist_Mean"
+avg_dist <- spread(avg_dist,curHighLow,Dist_Mean)
+colnames(avg_dist)[2:3] <- c("RD_Low","RD_High")
+avg_dist$RD_Avg <- (avg_dist$RD_High + avg_dist$RD_Low) / 2
+avg_dist$RD_Diff <- (avg_dist$RD_Low - avg_dist$RD_High) #/ (avg_dist$RD_High + avg_dist$RD_Low)
+
+tmp_dat2 <- merge(tmp_dat2,avg_dist,by="subj")
+
+
+```
+
+### Relation of VTA activation with HPC stability
+```{r}
+cor.test(tmp_dat2$VTA_Avg,tmp_dat2$RD_Avg)
+cor.test(tmp_dat2$VTA_Diff,tmp_dat2$RD_Diff)
+
+cor.test(tmp_dat2$VTA_High,tmp_dat2$RD_High)
+cor.test(tmp_dat2$VTA_Low,tmp_dat2$RD_Low)
+
+## Plots across both conditions
+ggplot(tmp_dat2, aes(x = VTA_Avg, y = RD_Avg)) +
+    geom_point(size=2.5,alpha=.6) +
+    geom_line(data=tmp_dat2,stat="smooth",method="lm", aes(x = VTA_Avg, y = RD_Avg), color='black',size=1.8, alpha=.8, se=FALSE) +
+  labs(y="HPC\nRepresentation Distance", x="VTA BOLD (a.u.)") + 
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+if (figsave == 1){
+  fname <-paste(figfldr, "IndivCorr_VTA-HPC.pdf",sep="")
+  ggsave(fname,device=cairo_pdf)
+}
+
+```
+VTA activation is significantly correlated with HPC stability across individual (r = -0.56). This correlation was observed for both High (r = -0.58) and Low curiosity (r = -0.44), but was not observed when correlating the difference (i.e. High - Low).
+
+### Relation of HPC stability with Memory performance
+```{r}
+### Across both conditions
+cor.test(tmp_dat2$Diff,tmp_dat2$RD_Diff, method="pearson")
+cor.test(tmp_dat2$Avg,tmp_dat2$RD_Diff, method="pearson")
+
+### Separately for each condition
+cor.test(tmp_dat2$High,tmp_dat2$RD_High, method="pearson")
+cor.test(tmp_dat2$Low,tmp_dat2$RD_Low, method="pearson")
+
+
+### Plot
+ggplot(tmp_dat2, aes(x = RD_Diff, y = Avg)) +
+    geom_point(size=2.5,alpha=.6) +
+    geom_line(data=tmp_dat2,stat="smooth",method="lm", aes(x = RD_Diff, y = Avg), color='black',size=1.8, alpha=.8, se=FALSE) +
+  #labs(y="Memory Recall", x="Representation Distance(Δ)") + 
+  labs(y="Memory Recall", x="HPC\nModulated Distance(Δ)") + 
+  theme_classic(base_size=theme_bs) + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+```
+we did not observe a significant correlation between the difference in curiosity-related hippocampal convergence (Low - High curiosity) and memory benefits (r = -.05, p = .831), we did observe a significant correlation between curiosity-related hippocampal convergence and overall memory performance (across both conditions) whereby a greater curiosity-related hippocampal convergence was associated with better memory performance (r = .44, p = .037).
+
+# **Other Control Analyses**
+## **Behavioral**
+Comparing differences in number of Recall and Forgotten trials
+```{r Number of Recall and Forgotten}
+beh_raw2 <- beh_raw
+beh_raw2$Misses <- beh_raw2$Hits==0
+beh_tmp = beh_raw2 %>% group_by(subj) %>% summarise(hit_count = sum(Hits),
+                                                    miss_count = sum(Misses)
+)
+
+mean(beh_tmp$hit_count)
+sd(beh_tmp$hit_count)
+mean(beh_tmp$miss_count)
+sd(beh_tmp$miss_count)
+
+count_mem <- t.test(beh_tmp$hit_count, beh_tmp$miss_count, paired=T)
+count_mem
+```
+There was no significant difference in the number of trials that were recalled vs forgotten.
+
+## **Convergence Measures**
+```{r Anticipatory HPC distance - Curiosity and likelihood of knowing}
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","likelihoodZ",wroi)]
+colnames(tmp_dat)[4] <- "Dist"
+colnames(tmp_dat)[5] <- "Act"
+
+q.hpc.dist_cur_ctrl <- lmer(Dist ~ curHighLow + likelihoodZ + (1|subj),data = tmp_dat, REML=F)
+summary(q.hpc.dist_cur_ctrl)
+emmeans(q.hpc.dist_cur_ctrl, list(pairwise ~ curHighLow), adjust = "tukey",pbkrtest.limit = 3188)
+
+```
+Curiosity remained a significant predictor of convergence after controlling for self-reported likelihood of knowing.
+
+## **Modeling Action effects on convergence**
+```{r Anticipatory HPC distance - Curiosity and Motor}
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","Motor",wroi)] 
+colnames(tmp_dat)[4]<-"Dist"
+colnames(tmp_dat)[5] <-"Act"
+
+# Curiosity x Motor
+q.hpc.dist_cm_ctrl <- lmer(Dist ~ curHighLow * Motor + (1|subj),data = tmp_dat, REML=F)
+summary(q.hpc.dist_cm_ctrl)
+```
+Curiosity remained a significant predictor of convergence after controlling for action.
+
+## **Modeling Delay Interval**
+```{r}
+# Convert delay to factor
+dist_raw$delay <-as.factor(dist_raw$delay)
+```
+
+```{r Anticipatory HPC distance - Curiosity and Delay}
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","delay",wroi)] 
+colnames(tmp_dat)[4]<-"Dist"
+colnames(tmp_dat)[5] <- "Act"
+
+
+# Curiosity & Delay
+q.hpc.dist_cd_ctrl <- lmer(Dist ~ curHighLow + delay + (1|subj),data = tmp_dat, REML=F)
+summary(q.hpc.dist_cd_ctrl)
+```
+Curiosity remained a significant predictor of convergence after controlling for delay.
+
+```{r Anticipatory HPC distance on memory controlling for delay}
+q.rois.dist_mem_delay_ctrl <- glmer(Memory ~Q_HPC_p2c + Q_PHC_mask_MNI152_bin_p2c + Q_PRC_mask_MNI152_bin_p2c + delay + (1|subj), family = binomial, data=dist_raw)
+summary(q.rois.dist_mem_delay_ctrl)
+
+```
+HPC convergence remained a significant predictor of memory after controlling for delay.
+
+```{r VTA activation and Anticipatory HPC distance controlling for delay}
+## HPC Distance
+wroi <- c("Q_HPC_p2c","Q_HPC_mean_act","Q_VTA_50_noSN_bin_mean_act")
+tmp_dat <- dist_raw[c("subj","curHighLow","delay",wroi)]
+colnames(tmp_dat)[4] <- "Dist"
+colnames(tmp_dat)[5] <- "Act"
+colnames(tmp_dat)[6] <- "VTA_Act"
+
+q.hpc.dist_vta_delay_ctrl <- lmer(Dist ~ VTA_Act + delay + (1|subj),data = tmp_dat, REML=F)
+summary(q.hpc.dist_vta_delay_ctrl)
+
+```
+VTA activation remained a significant predictor of convergence after controlling for delay.
+
+## **Motion related**
+Correlating individual difference in motion and hippocampal convergence.
+```{r}
+mot_dat <- read.csv("Data_csv/Compiled_Motion_AbsRMS.csv")
+mot_tmp = mot_dat %>% group_by(subj) %>% summarise(abs_rms = mean(abs_rms_mean))
+
+cvg_tmp = dist_raw %>% group_by(subj) %>% summarise(hpc_p2c =mean(Q_HPC_p2c))
+cvg_mot_dat = merge(cvg_tmp,mot_tmp,by="subj")
+
+cvg_mot_cor <- cor.test(cvg_mot_dat$hpc_p2c,cvg_mot_dat$abs_rms)
+cvg_mot_cor
+
+plot(cvg_mot_dat$hpc_p2c,cvg_mot_dat$abs_rms)
+
+```
+Individual difference in motion was not correlated with Hippocampal convergence.
+
+## **Performance across trials - Vigilance**
+```{r}
+wroi <- c("Q_HPC_p2c")
+tmp_dat <- dist_raw[c("subj","run","trial",wroi)]
+colnames(tmp_dat)[4] <- "Dist"
+tmp_dat$run_ord <-ordered(tmp_dat$run,levels=1:6,labels=c("R1","R2","R3","R4","R5","R6"))
+
+cvg_across_time <- lmer(Dist ~ run_ord * trial + (1|subj),data = tmp_dat, REML=F)
+anova(cvg_across_time)
+
+```
+There was no significant main effect of Run and Trial number nor a significant interaction on Hippocampal convergence.
