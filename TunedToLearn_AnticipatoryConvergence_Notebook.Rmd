@@ -1,3 +1,8 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
 ----
 title: "TunedToLearn_AnticipatoryConvergence_Notebook"
 output: html_notebook
@@ -8,7 +13,7 @@ Analysis notebook for "Tuned to Learn: An anticipatory hippocampal convergence s
 
 ```{r Load Required Packages}
 # Load required packages
-pkgs = c("tidyverse","magrittr","lme4","lmerTest","emmeans","cowplot","gghalves","mediation")
+pkgs = c("tidyverse","magrittr","lme4","lmerTest","emmeans","cowplot","gghalves","mediation","sjstats")
 
 inst = lapply(pkgs, library, character.only=TRUE)
 ```
@@ -66,7 +71,7 @@ Lowest number of total valid trials: Subj102 - 82 trial (44 High)
 # **Behavioral Data analysis (Group Average)**
 ## Data Prep
 ```{r Behav Data Prep}
-full_dat <- read.csv("Data_csv/Convergence_TrialByTrial_Compiled.csv")
+full_dat <- read.csv("Data_csv/SourceData.csv")
 full_dat <- drop_na(full_dat,c("curHighLow","memory"))
 full_dat <- rename(full_dat,Motor=motor,
                    Memory=memory)
@@ -2352,8 +2357,6 @@ cvg_mot_dat = merge(cvg_tmp,mot_tmp,by="subj")
 
 cvg_mot_cor <- cor.test(cvg_mot_dat$hpc_p2c,cvg_mot_dat$abs_rms)
 cvg_mot_cor
-
-plot(cvg_mot_dat$hpc_p2c,cvg_mot_dat$abs_rms)
 
 ```
 Individual difference in motion was not correlated with Hippocampal convergence.
