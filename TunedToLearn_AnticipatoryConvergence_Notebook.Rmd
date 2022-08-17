@@ -47,8 +47,8 @@ line_alpha <- .3 # Alpha of line connecting points
 theme_bs <- 21 # Theme base size
 plotbar_width <-2.25
 
-#figfldr <-"~/Dropbox/A_WorkingDocuments/ICE/ice-learningstate/Figures_Pub_pdf_v6/"
-#revfigfldr <-"~/Dropbox/A_Projects_Manuscripts/Submitted/ICE/Manuscript/Revision_Figures/"
+figfldr <-"~"
+revfigfldr <-"~"
 figsave<-0
 ```
 
